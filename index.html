@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Board</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0a0a0a;
+    color: #ededed;
+    min-height: 100vh;
+    padding: 40px 20px;
+    display: flex;
+    justify-content: center;
+  }
+  .container { width: 100%; max-width: 640px; }
+  h1 { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 14px; color: #6b6b6b; margin-bottom: 28px; }
+  .composer {
+    background: #141414; border: 1px solid #1f1f1f;
+    border-radius: 12px; padding: 16px; margin-bottom: 28px;
+  }
+  input, textarea {
+    width: 100%; background: #0f0f0f; border: 1px solid #1f1f1f;
+    border-radius: 8px; padding: 10px 14px; color: #ededed;
+    font-family: inherit; font-size: 14px; outline: none;
+    transition: border-color 0.15s;
+  }
+  input:focus, textarea:focus { border-color: #2f2f2f; }
+  input { margin-bottom: 10px; }
+  textarea { resize: vertical; min-height: 80px; max-height: 300px; line-height: 1.5; margin-bottom: 12px; }
+  .composer-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .char-count { font-size: 12px; color: #5a5a5a; }
+  button {
+    background: #ededed; color: #0a0a0a; border: none;
+    border-radius: 8px; padding: 10px 20px; font-size: 14px;
+    font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+  }
+  button:hover:not(:disabled) { opacity: 0.9; }
+  button:disabled { opacity: 0.3; cursor: not-allowed; }
+  .status { font-size: 13px; margin-bottom: 16px; padding: 10px 14px; border-radius: 8px; display: none; }
+  .status.show { display: block; }
+  .status.error { background: #2a1414; border: 1px solid #4a1f1f; color: #ff8a8a; }
+  .messages { display: flex; flex-direction: column; gap: 12px; }
+  .msg {
+    background: #141414; border: 1px solid #1f1f1f;
+    border-radius: 10px; padding: 14px 16px;
+    animation: fadeIn 0.2s ease-out;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+  .msg-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; gap: 12px; }
+  .msg-author { font-size: 13px; font-weight: 600; color: #ededed; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg-time { font-size: 11px; color: #5a5a5a; flex-shrink: 0; }
+  .msg-text { font-size: 14px; line-height: 1.55; color: #d4d4d4; white-space: pre-wrap; word-wrap: break-word; }
+  .empty { text-align: center; padding: 40px 20px; color: #5a5a5a; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Board</h1>
+  <p class="subtitle">Пиши что угодно. Все увидят.</p>
+
+  <div class="composer">
+    <input type="text" id="nameInput" placeholder="Твоё имя (необязательно)" maxlength="32">
+    <textarea id="textInput" placeholder="Напиши сообщение… (Ctrl+Enter — отправить)" maxlength="500"></textarea>
+    <div class="composer-footer">
+      <span class="char-count" id="charCount">0 / 500</span>
+      <button id="sendBtn" disabled>Отправить</button>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+  <div class="messages" id="messages"><div class="empty">Загрузка...</div></div>
+</div>
+
+<script type="module">
+// Твои ключи из Supabase
+const supabaseUrl = 'https://ezcfipambwntofbrtpgq.supabase.co';
+const supabaseKey = 'sb_publishable_8wqo68RROKH5DuoI9zIY7Q_IdyAwLO0';
+
+const nameInput = document.getElementById('nameInput');
+const textInput = document.getElementById('textInput');
+const sendBtn = document.getElementById('sendBtn');
+const charCount = document.getElementById('charCount');
+const statusEl = document.getElementById('status');
+const messagesEl = document.getElementById('messages');
+
+let supabase = null;
+let isSending = false;
+
+// Экранирование HTML для безопасности
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function formatTime(ts) {
+  const d = new Date(ts);
+  const diff = (new Date() - d) / 1000;
+  if (diff < 60) return 'только что';
+  if (diff < 3600) return Math.floor(diff / 60) + ' мин назад';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' ч назад';
+  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderMessage(msg) {
+  const empty = messagesEl.querySelector('.empty');
+  if (empty) empty.remove();
+
+  const el = document.createElement('div');
+  el.className = 'msg';
+  el.innerHTML = `
+    <div class="msg-header">
+      <span class="msg-author">${escapeHtml(msg.name || 'Аноним')}</span>
+      <span class="msg-time">${formatTime(msg.created_at)}</span>
+    </div>
+    <div class="msg-text">${escapeHtml(msg.text)}</div>
+  `;
+  messagesEl.prepend(el); // Новые сверху
+}
+
+async function init() {
+  try {
+    const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2');
+    supabase = createClient(supabaseUrl, supabaseKey);
+
+    // 1. Загружаем историю
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+
+    messagesEl.innerHTML = '';
+    if (!data || data.length === 0) {
+      messagesEl.innerHTML = '<div class="empty">Пока пусто. Напиши первым.</div>';
+    } else {
+      data.reverse().forEach(renderMessage);
+    }
+
+    // 2. Слушаем новые в реальном времени
+    supabase.channel('public:messages')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
+        renderMessage(payload.new);
+      })
+      .subscribe();
+
+    updateSendState();
+  } catch (e) {
+    showStatus('Ошибка подключения: ' + e.message);
+    messagesEl.innerHTML = '<div class="empty">Не удалось загрузить базу.</div>';
+  }
+}
+
+async function sendMessage() {
+  const text = textInput.value.trim();
+  if (!text || isSending || !supabase) return;
+  const name = nameInput.value.trim() || 'Аноним';
+
+  isSending = true;
+  sendBtn.disabled = true;
+
+  try {
+    const { error } = await supabase.from('messages').insert({
+      name: name.slice(0, 32),
+      text: text.slice(0, 500)
+    });
+    
+    if (error) throw error;
+    
+    textInput.value = '';
+    updateCharCount();
+    localStorage.setItem('board_name', name);
+  } catch (e) {
+    showStatus('Ошибка отправки: ' + e.message);
+  } finally {
+    isSending = false;
+    updateSendState();
+  }
+}
+
+function showStatus(msg) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status show error';
+  setTimeout(() => { statusEl.className = 'status'; }, 5000);
+}
+
+function updateCharCount() {
+  charCount.textContent = `${textInput.value.length} / 500`;
+}
+
+function updateSendState() {
+  sendBtn.disabled = !supabase || isSending || textInput.value.trim().length === 0;
+}
+
+textInput.addEventListener('input', () => { updateCharCount(); updateSendState(); });
+textInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); }
+});
+sendBtn.addEventListener('click', sendMessage);
+
+const savedName = localStorage.getItem('board_name');
+if (savedName) nameInput.value = savedName;
+
+updateSendState();
+init();
+</script>
+</body>
+</html>
